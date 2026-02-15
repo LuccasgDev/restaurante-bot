@@ -54,9 +54,18 @@ function confirmouPedido(msg) {
   return /\b(sim|est[aá] certo|correto|confirmo|pode ser)\b/i.test(msg) && !/\b(n[aã]o|nao)\b/i.test(msg);
 }
 
-// Verifica se quer cancelar / encerrar sem pedir
+// Verifica se quer cancelar / encerrar sem pedir (regras locais para evitar loop)
 function querCancelarOuSair(msg) {
-  return /\b(n[aã]o\s*quero|obrigad[oa]\s*(ate|até)|ate\s*a\s*proxima|até\s*a\s*pr[oó]xima|cancelar|sair|deixa\s*pra\s*l[aá]|desistir|parar)\b/i.test(msg);
+  const t = msg.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /nao\s*quero|obrigad[oa].*ate|obrigad[oa].*proxima|ate\s*a\s*proxima|cancelar|sair|deixa\s*pra\s*la|desistir|parar|tchau|ate\s*mais/.test(t) ||
+    (t.includes('obrigado') && (t.includes('ate') || t.includes('proxima')));
+}
+
+// Verifica se pediu para ver o cardápio de novo (regras locais para evitar loop)
+function querVerCardapioDeNovo(msg) {
+  const t = msg.toLowerCase().normalize('NFD').replace(/\u0300/g, '');
+  if (!t.includes('cardapio')) return false;
+  return /ver|mostrar|mostra|mostar|manda|mandar|envia|enviar|novamente|de\s*novo|denovo/i.test(t);
 }
 
 // Envia resposta: tenta o agente de IA primeiro, senão usa o texto fixo
@@ -142,9 +151,8 @@ app.post('/whatsapp', async (req, res) => {
     // ---------- Escolhendo PRATOS (pode mandar vários números, "pronto", cancelar ou ver cardápio de novo) ----------
     else if (clienteData.etapa === 'escolhendo_pratos') {
 
-      const intentPratos = await detectarIntent('escolhendo_pratos', mensagem);
-
-      if (querCancelarOuSair(mensagemLower) || intentPratos === 'CANCELAR') {
+      // 1) Cancelar: regras locais primeiro (evita loop quando a API falha ou demora)
+      if (querCancelarOuSair(mensagemLower)) {
         await responder(twiml, {
           etapa: 'cliente_desistiu',
           mensagemCliente: mensagem,
@@ -155,6 +163,30 @@ app.post('/whatsapp', async (req, res) => {
         return res.end(twiml.toString());
       }
 
+      // 2) Ver cardápio de novo: regras locais primeiro (evita loop)
+      if (querVerCardapioDeNovo(mensagemLower)) {
+        const pratos = await pool.query(
+          "SELECT id, nome, preco FROM cardapio WHERE ativo=true AND (categoria='prato' OR categoria IS NULL) ORDER BY id"
+        );
+        const listaPratos = pratos.rows.map(p =>
+          `${p.id} - ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`
+        ).join('\n');
+        twiml.message(`🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os *números* dos pratos que deseja (ex: 1 2 ou 1 e 2). Quando terminar, digite *pronto*.`);
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        return res.end(twiml.toString());
+      }
+
+      const intentPratos = await detectarIntent('escolhendo_pratos', mensagem);
+      if (intentPratos === 'CANCELAR') {
+        await responder(twiml, {
+          etapa: 'cliente_desistiu',
+          mensagemCliente: mensagem,
+          contexto: 'Cliente desistiu do pedido. Despeça-se.',
+        }, "Tudo bem! Quando quiser, é só mandar *oi*. Até a próxima! 👋");
+        await pool.query('UPDATE clientes SET etapa=$1 WHERE id=$2', ['inicio', clienteData.id]);
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        return res.end(twiml.toString());
+      }
       if (intentPratos === 'VER_CARDAPIO') {
         const pratos = await pool.query(
           "SELECT id, nome, preco FROM cardapio WHERE ativo=true AND (categoria='prato' OR categoria IS NULL) ORDER BY id"
@@ -162,12 +194,7 @@ app.post('/whatsapp', async (req, res) => {
         const listaPratos = pratos.rows.map(p =>
           `${p.id} - ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`
         ).join('\n');
-        await responder(twiml, {
-          etapa: 'mostrando_cardapio_pratos',
-          mensagemCliente: mensagem,
-          contexto: 'Cliente pediu para ver o cardápio de novo. Mostre a lista de pratos novamente.',
-          dados: { listaPratos },
-        }, `🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os *números* dos pratos que deseja (ex: 1 2 ou 1 e 2). Quando terminar, digite *pronto*.`);
+        twiml.message(`🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os *números* dos pratos que deseja (ex: 1 2 ou 1 e 2). Quando terminar, digite *pronto*.`);
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         return res.end(twiml.toString());
       }
