@@ -87,6 +87,7 @@ app.post('/whatsapp', async (req, res) => {
         }
       }
       await pool.query(`UPDATE pedidos SET total = (SELECT COALESCE(SUM(preco * quantidade), 0) FROM itens_pedido WHERE pedido_id = $1) WHERE id = $1`, [pedidoId]);
+      twiml.message(msgResposta);
     } else if (acao === 'adicionar_bebidas' && Array.isArray(dados.itens) && dados.itens.length > 0) {
       const mapaBebidas = Object.fromEntries(cardapioBebidas.map(b => [b.id, b]));
       const pedido = await pool.query(`SELECT id FROM pedidos WHERE cliente_id=$1 AND status='montando' ORDER BY criado_em DESC LIMIT 1`, [clienteData.id]);
@@ -132,7 +133,7 @@ app.post('/whatsapp', async (req, res) => {
 
   } catch (err) {
     console.error(err);
-    twiml.message("Desculpe, ocorreu um erro. Tente de novo ou mande *oi* para recomeçar.");
+      twiml.message("Desculpe, ocorreu um erro. Tente de novo ou mande *oi* para recomeçar.");
     res.writeHead(200, { 'Content-Type': 'text/xml' });
     return res.end(twiml.toString());
   }

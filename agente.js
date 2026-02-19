@@ -75,6 +75,10 @@ async function gerarRespostaAgente({ etapa, mensagemCliente, contexto = '', dado
     return response.text().trim();
   } catch (err) {
     console.error('[Agente IA] Erro ao gerar resposta:', err.message);
+    // Check if it's a quota exceeded error
+    if (err.message.includes('quota exceeded') || err.message.includes('429')) {
+      return null; // Return null to let fallback handle it naturally
+    }
     return null;
   }
 }
@@ -122,6 +126,22 @@ Responda com UMA ÚNICA PALAVRA da lista.`;
     return encontrada || 'DESCONHECIDO';
   } catch (err) {
     console.error('[Agente IA] Erro ao detectar intenção:', err.message);
+    // Check if it's a quota exceeded error
+    if (err.message.includes('quota exceeded') || err.message.includes('429')) {
+      // Fallback to basic intent detection without AI
+      const msg = mensagemCliente.toLowerCase().trim();
+      if (msg.includes('cancel') || msg.includes('encerr') || msg.includes('sair')) return 'CANCELAR';
+      if (msg.includes('oi') || msg.includes('ola') || msg.includes('bom dia') || msg.includes('boa tarde') || msg.includes('boa noite')) return 'QUER_VER_CARDAPIO';
+      if (msg.includes('cardápio') || msg.includes('menu')) return 'VER_CARDAPIO';
+      if (msg.includes('pronto') || msg.includes('só isso')) return 'PRONTO';
+      if (msg.includes('não quero') || msg.includes('nao quero')) return 'NAO_QUERO_BEBIDA';
+      if (msg.includes('sim') || msg.includes('confirm')) return 'CONFIRMAR_SIM';
+      if (msg.includes('pix') || msg === '1') return 'PAGAMENTO_PIX';
+      if (msg.includes('dinheiro') || msg === '2') return 'PAGAMENTO_DINHEIRO';
+      if (msg.includes('cartão') || msg.includes('cartao') || msg === '3') return 'PAGAMENTO_CARTAO';
+      // Check if it contains numbers (likely ordering)
+      if (/\d/.test(msg)) return 'ESCOLHER_ITENS';
+    }
     return 'DESCONHECIDO';
   }
 }
@@ -175,6 +195,14 @@ Responda APENAS JSON: [{"id":n,"quantidade":n},...]. Se não for pedido, [].`;
       .map(p => ({ id: Number(p.id), quantidade: Math.min(99, Math.floor(Number(p.quantidade))) }));
   } catch (err) {
     console.error('[Agente IA] Erro ao interpretar pedido:', err.message);
+    // Check if it's a quota exceeded error
+    if (err.message.includes('quota exceeded') || err.message.includes('429')) {
+      // Fallback to basic number extraction
+      const numbers = mensagemCliente.match(/\d+/g);
+      if (numbers && numbers.length > 0) {
+        return numbers.map(num => ({ id: parseInt(num), quantidade: 1 }));
+      }
+    }
     return [];
   }
 }
@@ -246,6 +274,66 @@ Para outras ações, dados pode ser {}.`;
     };
   } catch (err) {
     console.error('[Agente] Erro:', err.message);
+    // Check if it's a quota exceeded error
+    if (err.message.includes('quota exceeded') || err.message.includes('429')) {
+      // Fallback to basic responses without AI
+      const msgLower = mensagem.toLowerCase().trim();
+      const etapaAtual = etapa === 'start' ? 'inicio' : etapa;
+      
+      if (msgLower.includes('oi') || msgLower.includes('ola') || msgLower.includes('bom dia') || msgLower.includes('boa tarde') || msgLower.includes('boa noite')) {
+        return { 
+          mensagem: 'Olá! 👋 Seja bem-vindo ao nosso restaurante! Quer ver nosso cardápio de pratos?', 
+          acao: 'mostrar_cardapio_pratos', 
+          dados: {}, 
+          proximaEtapa: 'escolhendo_pratos' 
+        };
+      }
+      
+      if (msgLower.includes('cardápio') || msgLower.includes('menu')) {
+        return { 
+          mensagem: `🍽️ *NOSSO CARDÁPIO*\n\n${pratosStr}\n\n${bebidasStr}\n\nPara pedir, envie os números dos itens desejados (ex: 1 2) ou descreva o que quer!`, 
+          acao: 'responder', 
+          dados: {}, 
+          proximaEtapa: etapaAtual 
+        };
+      }
+      
+      if (msgLower.includes('cancel') || msgLower.includes('encerr')) {
+        return { 
+          mensagem: 'Pedido cancelado. Se precisar de algo, é só chamar! 👋', 
+          acao: 'cancelar', 
+          dados: {}, 
+          proximaEtapa: 'inicio' 
+        };
+      }
+      
+      // Try to extract numbers for ordering
+      const numbers = mensagem.match(/\d+/g);
+      if (numbers && numbers.length > 0 && cardapioPratos.length > 0) {
+        const itens = numbers.map(num => {
+          const id = parseInt(num);
+          const item = cardapioPratos.find(p => p.id === id);
+          return item ? { id, quantidade: 1 } : null;
+        }).filter(Boolean);
+        
+        if (itens.length > 0) {
+          return { 
+            mensagem: `Recebi seu pedido! Adicionando: ${itens.map(i => cardapioPratos.find(p => p.id === i.id)?.nome).join(', ')}. Mais algo?`, 
+            acao: 'adicionar_pratos', 
+            dados: { itens }, 
+            proximaEtapa: 'escolhendo_pratos' 
+          };
+        }
+      }
+      
+      return { 
+        mensagem: 'Olá! 👋 Para fazer seu pedido, envie os números dos itens do cardápio (ex: 1 2) ou descreva o que quer! Posso ajudar?', 
+        acao: 'responder', 
+        dados: {}, 
+        proximaEtapa: etapaAtual 
+      };
+    }
+    
     return { mensagem: 'Desculpe, ocorreu um erro. Tente novamente ou mande *oi*.', acao: 'responder', dados: {}, proximaEtapa: etapa };
   }
 }
