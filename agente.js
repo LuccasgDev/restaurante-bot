@@ -131,7 +131,7 @@ Responda com UMA ÚNICA PALAVRA da lista.`;
       // Fallback to basic intent detection without AI
       const msg = mensagemCliente.toLowerCase().trim();
       if (msg.includes('cancel') || msg.includes('encerr') || msg.includes('sair')) return 'CANCELAR';
-      if (msg.includes('oi') || msg.includes('ola') || msg.includes('bom dia') || msg.includes('boa tarde') || msg.includes('boa noite')) return 'QUER_VER_CARDAPIO';
+      if (msg.includes('oi') || msg.includes('ola') || msg.includes('bom dia') || msg.includes('boa tarde') || msg.includes('boa noite') || msg.includes('sim')) return 'QUER_VER_CARDAPIO';
       if (msg.includes('cardápio') || msg.includes('menu')) return 'VER_CARDAPIO';
       if (msg.includes('pronto') || msg.includes('só isso')) return 'PRONTO';
       if (msg.includes('não quero') || msg.includes('nao quero')) return 'NAO_QUERO_BEBIDA';
@@ -276,38 +276,51 @@ Para outras ações, dados pode ser {}.`;
     console.error('[Agente] Erro:', err.message);
     // Check if it's a quota exceeded error
     if (err.message.includes('quota exceeded') || err.message.includes('429')) {
-      // Fallback to basic responses without AI
+      // Fallback to smart responses without AI - Agent-like behavior
       const msgLower = mensagem.toLowerCase().trim();
       const etapaAtual = etapa === 'start' ? 'inicio' : etapa;
       
+      // Welcome and engagement - Agent personality
       if (msgLower.includes('oi') || msgLower.includes('ola') || msgLower.includes('bom dia') || msgLower.includes('boa tarde') || msgLower.includes('boa noite')) {
         return { 
-          mensagem: 'Olá! 👋 Seja bem-vindo ao nosso restaurante! Quer ver nosso cardápio de pratos?', 
+          mensagem: 'Olá! 👋 Seja bem-vindo ao nosso restaurante! Sou seu atendente virtual e estou aqui para ajudar. Quer ver nosso cardápio de pratos deliciosos?', 
           acao: 'mostrar_cardapio_pratos', 
           dados: {}, 
           proximaEtapa: 'escolhendo_pratos' 
         };
       }
       
-      if (msgLower.includes('cardápio') || msgLower.includes('menu')) {
+      // Positive responses - Show menu with enthusiasm
+      if (msgLower.includes('sim') || msgLower.includes('quero') || msgLower.includes('pode') || msgLower.includes('mostra') || msgLower.includes('vamos')) {
         return { 
-          mensagem: `🍽️ *NOSSO CARDÁPIO*\n\n${pratosStr}\n\n${bebidasStr}\n\nPara pedir, envie os números dos itens desejados (ex: 1 2) ou descreva o que quer!`, 
+          mensagem: `🍽️ *NOSSO CARDÁPIO - FIQUE A VONTADE!*\n\n${pratosStr}\n\n${bebidasStr}\n\n😋 Temos opções maravilhosas! Para fazer seu pedido, me diga os números (ex: "quero 1 e 3") ou descreva o que está com vontade! Posso anotar agora?`, 
           acao: 'responder', 
           dados: {}, 
           proximaEtapa: etapaAtual 
         };
       }
       
-      if (msgLower.includes('cancel') || msgLower.includes('encerr')) {
+      // Menu requests - Detailed and helpful
+      if (msgLower.includes('cardápio') || msgLower.includes('menu') || msgLower.includes('opções')) {
         return { 
-          mensagem: 'Pedido cancelado. Se precisar de algo, é só chamar! 👋', 
+          mensagem: `🍽️ *NOSSO CARDÁPIO - DELÍCIAS ESPERANDO POR VOCÊ!*\n\n${pratosStr}\n\n${bebidasStr}\n\n💡 *Dica:* A Maminha e a Carne de sol são nossos campeões! A Picanta suína também é uma delícia. Me diga o que você gostaria de experimentar!`, 
+          acao: 'responder', 
+          dados: {}, 
+          proximaEtapa: etapaAtual 
+        };
+      }
+      
+      // Cancellation - Empathetic
+      if (msgLower.includes('cancel') || msgLower.includes('encerr') || msgLower.includes('desistir') || msgLower.includes('agora não')) {
+        return { 
+          mensagem: 'Tudo bem! Sem problemas 😊 Se mudar de ideia, estarei aqui! Pode chamar quando quiser. Um ótimo dia! 👋', 
           acao: 'cancelar', 
           dados: {}, 
           proximaEtapa: 'inicio' 
         };
       }
       
-      // Try to extract numbers for ordering
+      // Try to extract numbers for ordering - Smart interpretation
       const numbers = mensagem.match(/\d+/g);
       if (numbers && numbers.length > 0 && cardapioPratos.length > 0) {
         const itens = numbers.map(num => {
@@ -317,8 +330,12 @@ Para outras ações, dados pode ser {}.`;
         }).filter(Boolean);
         
         if (itens.length > 0) {
+          const nomesItens = itens.map(i => cardapioPratos.find(p => p.id === i.id)?.nome).join(', ');
+          const comentarios = nomesItens.includes('Maminha') ? ' Excelente escolha! ' : '';
+          const comentarios2 = nomesItens.includes('Carne de sol') ? ' Nossa Carne de sol é imperdível! ' : '';
+          
           return { 
-            mensagem: `Recebi seu pedido! Adicionando: ${itens.map(i => cardapioPratos.find(p => p.id === i.id)?.nome).join(', ')}. Mais algo?`, 
+            mensagem: `✨ *Ótima escolha!* ${comentarios}${comentarios2}Anotei: ${nomesItens}. Mais alguma coisa? Quer alguma bebida para acompanhar? 🥤`, 
             acao: 'adicionar_pratos', 
             dados: { itens }, 
             proximaEtapa: 'escolhendo_pratos' 
@@ -326,8 +343,49 @@ Para outras ações, dados pode ser {}.`;
         }
       }
       
+      // Natural language processing - Smart keyword detection
+      if (msgLower.includes('maminha') || msgLower.includes('carne de sol') || msgLower.includes('picanha') || msgLower.includes('frango') || msgLower.includes('linguiça')) {
+        let itensEncontrados = [];
+        if (msgLower.includes('maminha')) itensEncontrados.push({ id: 1, quantidade: 1 });
+        if (msgLower.includes('carne de sol')) itensEncontrados.push({ id: 2, quantidade: 1 });
+        if (msgLower.includes('picanha')) itensEncontrados.push({ id: 3, quantidade: 1 });
+        if (msgLower.includes('frango')) itensEncontrados.push({ id: 4, quantidade: 1 });
+        if (msgLower.includes('linguiça')) itensEncontrados.push({ id: 5, quantidade: 1 });
+        
+        if (itensEncontrados.length > 0) {
+          const nomesItens = itensEncontrados.map(i => cardapioPratos.find(p => p.id === i.id)?.nome).join(', ');
+          return { 
+            mensagem: `🎯 *Entendi perfeitamente!* Anotei seu pedido: ${nomesItens}. Ótimo paladar! Mais algo? Quer adicionar alguma bebida? 🥤`, 
+            acao: 'adicionar_pratos', 
+            dados: { itens: itensEncontrados }, 
+            proximaEtapa: 'escolhendo_pratos' 
+          };
+        }
+      }
+      
+      // Ready/confirmation - Natural
+      if (msgLower.includes('pronto') || msgLower.includes('é isso') || msgLower.includes('só isso') || msgLower.includes('pode ser')) {
+        return { 
+          mensagem: '� *Perfeito!* Vou preparar seu pedido! Quer adicionar alguma bebida ou podemos fechar por aqui? 🥤', 
+          acao: 'oferecer_bebidas', 
+          dados: {}, 
+          proximaEtapa: 'escolhendo_bebidas' 
+        };
+      }
+      
+      // Don't want drinks - Natural
+      if (msgLower.includes('não quero bebida') || msgLower.includes('nao quero bebida') || msgLower.includes('só os pratos') || msgLower.includes('sem bebida')) {
+        return { 
+          mensagem: '👍 *Entendido!* Focamos só nos pratos então! Vou preparar tudo com muito carinho! ❤️ Quer confirmar seu pedido ou precisa de mais algo?', 
+          acao: 'mostrar_resumo_confirmar', 
+          dados: {}, 
+          proximaEtapa: 'confirmando_pedido' 
+        };
+      }
+      
+      // Help/general - Agent personality
       return { 
-        mensagem: 'Olá! 👋 Para fazer seu pedido, envie os números dos itens do cardápio (ex: 1 2) ou descreva o que quer! Posso ajudar?', 
+        mensagem: '😊 *Sou seu atendente virtual!* Estou aqui para ajudar! Posso mostrar o cardápio, anotar seu pedido ou responder dúvidas. Me diga o que você gostaria? 🍽️', 
         acao: 'responder', 
         dados: {}, 
         proximaEtapa: etapaAtual 
