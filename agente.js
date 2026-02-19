@@ -141,20 +141,24 @@ async function interpretarPedidoNatural(mensagemCliente, listaItens) {
   const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   const cardapioStr = listaItens.map(i => `${i.id}: ${i.nome}`).join(', ');
 
-  const prompt = `Você é um interpretador de pedidos de restaurante. O cliente escreveu em linguagem natural.
+  const prompt = `Você interpreta pedidos de restaurante. REGRAS CRÍTICAS:
 
-Cardápio disponível (id: nome): ${cardapioStr}
+1. "N quentinha(s) de [prato]" ou "N de [prato]" → N é QUANTIDADE, não ID. "3 quentinhas de maminha" = 3x Maminha.
+2. Associe pelo NOME do prato. "maminha"→Maminha, "costela suina"→Costela suína. Ignore typos (suina=suína).
+3. "quentinha/quentinhas/porção" = indicam porção, não mudam o item.
 
-Mensagem do cliente: "${mensagemCliente.trim()}"
+Cardápio (id: nome): ${cardapioStr}
 
-Extraia os itens pedidos e suas quantidades. Se o cliente não especificar quantidade, assuma 1.
+Mensagem: "${mensagemCliente.trim()}"
+
 Exemplos:
-- "quero um de Maminha e dois de carne de sol" → [{"id":1,"quantidade":1},{"id":2,"quantidade":2}]
+- "3 quentinha de maminha e 2 quentinhas de costela suina" → [{"id":1,"quantidade":3},{"id":7,"quantidade":2}]
 - "2 maminha e 1 linguiça" → [{"id":1,"quantidade":2},{"id":5,"quantidade":1}]
-- "quero o 1 e o 3" → [{"id":1,"quantidade":1},{"id":3,"quantidade":1}]
-- "só quero falar com alguém" → []
+- "quero um de Maminha e dois de carne de sol" → [{"id":1,"quantidade":1},{"id":2,"quantidade":2}]
+- "quero o 1 e o 3" (só números) → [{"id":1,"quantidade":1},{"id":3,"quantidade":1}]
+- "só quero falar" → []
 
-Responda APENAS com um JSON válido: array de objetos {"id": número, "quantidade": número}. Nada mais. Se não for pedido de itens, responda [].`;
+Responda APENAS JSON: [{"id":n,"quantidade":n},...]. Se não for pedido, [].`;
 
   try {
     const result = await model.generateContent(prompt);
@@ -167,8 +171,8 @@ Responda APENAS com um JSON válido: array de objetos {"id": número, "quantidad
 
     const idsValidos = new Set(listaItens.map(i => i.id));
     return parsed
-      .filter(p => p && typeof p.id === 'number' && typeof p.quantidade === 'number' && p.quantidade > 0 && idsValidos.has(p.id))
-      .map(p => ({ id: Number(p.id), quantidade: Math.min(99, Math.floor(p.quantidade)) }));
+      .filter(p => p && (typeof p.id === 'number' || typeof p.id === 'string') && (typeof p.quantidade === 'number' || typeof p.quantidade === 'string') && Number(p.quantidade) > 0 && idsValidos.has(Number(p.id)))
+      .map(p => ({ id: Number(p.id), quantidade: Math.min(99, Math.floor(Number(p.quantidade))) }));
   } catch (err) {
     console.error('[Agente IA] Erro ao interpretar pedido:', err.message);
     return [];
