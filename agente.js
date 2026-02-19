@@ -128,19 +128,48 @@ Responda com UMA ÚNICA PALAVRA da lista.`;
     console.error('[Agente IA] Erro ao detectar intenção:', err.message);
     // Check if it's a quota exceeded error
     if (err.message.includes('quota exceeded') || err.message.includes('429')) {
-      // Fallback to basic intent detection without AI
+      // Fallback to basic intent detection without AI - Smart sentiment analysis
       const msg = mensagemCliente.toLowerCase().trim();
-      if (msg.includes('cancel') || msg.includes('encerr') || msg.includes('sair')) return 'CANCELAR';
-      if (msg.includes('oi') || msg.includes('ola') || msg.includes('bom dia') || msg.includes('boa tarde') || msg.includes('boa noite') || msg.includes('sim')) return 'QUER_VER_CARDAPIO';
-      if (msg.includes('cardápio') || msg.includes('menu')) return 'VER_CARDAPIO';
-      if (msg.includes('pronto') || msg.includes('só isso')) return 'PRONTO';
-      if (msg.includes('não quero') || msg.includes('nao quero')) return 'NAO_QUERO_BEBIDA';
-      if (msg.includes('sim') || msg.includes('confirm')) return 'CONFIRMAR_SIM';
+      
+      // === SISTEMA DE RECONHECIMENTO DE SENTIMENTOS ===
+      
+      // Palavras POSITIVAS
+      const positivas = ['sim', 'quero', 'pode', 'mostra', 'vamos', 'claro', 'com certeza', 'gostaria', 'aceito', 'top', 'legal', 'boa', 'perfeito', 'ótimo', 'beleza', 'blz', 'ok', 'tá bom', 'bora', 'partiu', 'combinado'];
+      
+      // Palavras NEGATIVAS  
+      const negativas = ['não', 'nao', 'cancelar', 'encerrar', 'desistir', 'agora não', 'depois', 'prefiro não', 'melhor não', 'deixa pra lá', 'mudei de ideia'];
+      
+      // Verificar sentimento principal
+      const temPositiva = positivas.some(p => msg.includes(p));
+      const temNegativa = negativas.some(n => msg.includes(n));
+      
+      // Cancelamento
+      if (temNegativa || msg.includes('cancel') || msg.includes('encerr') || msg.includes('sair')) return 'CANCELAR';
+      
+      // Engajamento positivo - quer ver cardápio
+      if (temPositiva || msg.includes('oi') || msg.includes('ola') || msg.includes('bom dia') || msg.includes('boa tarde') || msg.includes('boa noite')) return 'QUER_VER_CARDAPIO';
+      
+      // Pedido direto de cardápio
+      if (msg.includes('cardápio') || msg.includes('menu') || msg.includes('opções')) return 'VER_CARDAPIO';
+      
+      // Finalização de pedido
+      if (msg.includes('pronto') || msg.includes('é isso') || msg.includes('só isso') || msg.includes('pode ser') || msg.includes('fechado')) return 'PRONTO';
+      
+      // Recusa de bebida
+      if (msg.includes('não quero') || msg.includes('nao quero') || msg.includes('sem bebida') || msg.includes('só os pratos')) return 'NAO_QUERO_BEBIDA';
+      
+      // Confirmação
+      if (msg.includes('confirm') || msg.includes('está certo') || msg.includes('correto')) return 'CONFIRMAR_SIM';
+      
+      // Pagamento
       if (msg.includes('pix') || msg === '1') return 'PAGAMENTO_PIX';
       if (msg.includes('dinheiro') || msg === '2') return 'PAGAMENTO_DINHEIRO';
       if (msg.includes('cartão') || msg.includes('cartao') || msg === '3') return 'PAGAMENTO_CARTAO';
-      // Check if it contains numbers (likely ordering)
+      
+      // Contém números - provavelmente fazendo pedido
       if (/\d/.test(msg)) return 'ESCOLHER_ITENS';
+      
+      return 'DESCONHECIDO';
     }
     return 'DESCONHECIDO';
   }
@@ -280,6 +309,34 @@ Para outras ações, dados pode ser {}.`;
       const msgLower = mensagem.toLowerCase().trim();
       const etapaAtual = etapa === 'start' ? 'inicio' : etapa;
       
+      // === SISTEMA DE RECONHECIMENTO DE SENTIMENTOS E INTENÇÕES ===
+      
+      // Palavras POSITIVAS - Aceitação, confirmação, interesse
+      const positivas = [
+        'sim', 'quero', 'pode', 'mostra', 'vamos', 'claro', 'com certeza', 'gostaria', 'pode ser',
+        'aceito', 'top', 'legal', 'boa', 'perfeito', 'ótimo', 'maravilhoso', 'delícia',
+        'anota', 'pode anotar', 'fechado', 'confirmado', 'beleza', 'blz', 'ok', 'tá bom',
+        'vamos lá', 'bora', 'partiu', 'combinado', 'acertivo', 'decidido', 'escolhido'
+      ];
+      
+      // Palavras NEGATIVAS - Recusa, cancelamento, dúvida
+      const negativas = [
+        'não', 'nao', 'cancelar', 'encerrar', 'desistir', 'agora não', 'depois',
+        'prefiro não', 'melhor não', 'sem chance', 'deixa pra lá', 'esquece',
+        'mudei de ideia', 'não quero', 'não gostei', 'não vale', 'cancelado'
+      ];
+      
+      // Palavras de DÚVIDA/NEUTRALIDADE
+      const neutras = [
+        'talvez', 'acho que', 'será', 'vou ver', 'deixa eu pensar', 'não sei',
+        'me diga', 'explique', 'como funciona', 'o que tem', 'quanto custa'
+      ];
+      
+      // Verificar sentimento principal
+      const temPositiva = positivas.some(p => msgLower.includes(p));
+      const temNegativa = negativas.some(n => msgLower.includes(n));
+      const temNeutra = neutras.some(n => msgLower.includes(n));
+      
       // Welcome and engagement - Agent personality
       if (msgLower.includes('oi') || msgLower.includes('ola') || msgLower.includes('bom dia') || msgLower.includes('boa tarde') || msgLower.includes('boa noite')) {
         return { 
@@ -290,10 +347,39 @@ Para outras ações, dados pode ser {}.`;
         };
       }
       
-      // Positive responses - Show menu with enthusiasm
-      if (msgLower.includes('sim') || msgLower.includes('quero') || msgLower.includes('pode') || msgLower.includes('mostra') || msgLower.includes('vamos')) {
+      // RESPOSTA POSITIVA - Mostrar cardápio com entusiasmo
+      if (temPositiva && !temNegativa) {
+        const entusiasmo = msgLower.includes('claro') ? 'Claro que sim! ' : 
+                        msgLower.includes('com certeza') ? 'Com certeza! ' :
+                        msgLower.includes('gostaria') ? 'Com certeza! ' :
+                        'Perfeito! ';
+        
         return { 
-          mensagem: `🍽️ *NOSSO CARDÁPIO - FIQUE A VONTADE!*\n\n${pratosStr}\n\n${bebidasStr}\n\n😋 Temos opções maravilhosas! Para fazer seu pedido, me diga os números (ex: "quero 1 e 3") ou descreva o que está com vontade! Posso anotar agora?`, 
+          mensagem: `${entusiasmo}🍽️ *NOSSO CARDÁPIO - FIQUE A VONTADE!*\n\n${pratosStr}\n\n${bebidasStr}\n\n😋 Temos opções maravilhosas! Para fazer seu pedido, me diga os números (ex: "quero 1 e 3") ou descreva o que está com vontade! Posso anotar agora?`, 
+          acao: 'responder', 
+          dados: {}, 
+          proximaEtapa: etapaAtual 
+        };
+      }
+      
+      // RESPOSTA NEGATIVA - Cancelamento empático
+      if (temNegativa || msgLower.includes('cancel') || msgLower.includes('encerr') || msgLower.includes('desistir')) {
+        const empatico = msgLower.includes('mudei') ? 'Sem problemas! Mudanças acontecem 😊' :
+                      msgLower.includes('agora não') ? 'Tudo bem! Sem problemas 😊' :
+                      'Tudo bem! Sem problemas 😊';
+        
+        return { 
+          mensagem: `${empatico} Se mudar de ideia, estarei aqui! Pode chamar quando quiser. Um ótimo dia! 👋`, 
+          acao: 'cancelar', 
+          dados: {}, 
+          proximaEtapa: 'inicio' 
+        };
+      }
+      
+      // RESPOSTA NEUTRA/DÚVIDA - Ajuda informativa
+      if (temNeutra || msgLower.includes('ajuda') || msgLower.includes('dúvida')) {
+        return { 
+          mensagem: `😊 *Claro! Estou aqui para ajudar!*\n\n${pratosStr}\n\n${bebidasStr}\n\n💡 *Dica:* Escolha pelo número (ex: "quero 1 e 2") ou me diga o nome do prato! Posso ajudar com mais alguma coisa?`, 
           acao: 'responder', 
           dados: {}, 
           proximaEtapa: etapaAtual 
@@ -301,22 +387,12 @@ Para outras ações, dados pode ser {}.`;
       }
       
       // Menu requests - Detailed and helpful
-      if (msgLower.includes('cardápio') || msgLower.includes('menu') || msgLower.includes('opções')) {
+      if (msgLower.includes('cardápio') || msgLower.includes('menu') || msgLower.includes('opções') || msgLower.includes('o que tem')) {
         return { 
           mensagem: `🍽️ *NOSSO CARDÁPIO - DELÍCIAS ESPERANDO POR VOCÊ!*\n\n${pratosStr}\n\n${bebidasStr}\n\n💡 *Dica:* A Maminha e a Carne de sol são nossos campeões! A Picanta suína também é uma delícia. Me diga o que você gostaria de experimentar!`, 
           acao: 'responder', 
           dados: {}, 
           proximaEtapa: etapaAtual 
-        };
-      }
-      
-      // Cancellation - Empathetic
-      if (msgLower.includes('cancel') || msgLower.includes('encerr') || msgLower.includes('desistir') || msgLower.includes('agora não')) {
-        return { 
-          mensagem: 'Tudo bem! Sem problemas 😊 Se mudar de ideia, estarei aqui! Pode chamar quando quiser. Um ótimo dia! 👋', 
-          acao: 'cancelar', 
-          dados: {}, 
-          proximaEtapa: 'inicio' 
         };
       }
       
