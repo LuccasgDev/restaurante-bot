@@ -72,6 +72,22 @@ app.post('/whatsapp', async (req, res) => {
 
     const { mensagem: msgResposta, acao, dados, proximaEtapa } = resultado;
 
+    // Salvar nome do cliente se informado
+    if (acao === 'salvar_nome_mostrar_cardapio' && dados.nome) {
+      await pool.query(
+        'UPDATE clientes SET nome = $1 WHERE telefone = $2',
+        [dados.nome, telefone]
+      );
+    }
+
+    // Salvar endereço do cliente se informado
+    if (acao === 'solicitar_endereco_entrega' && dados.endereco) {
+      await pool.query(
+        'UPDATE clientes SET endereco = $1 WHERE telefone = $2',
+        [dados.endereco, telefone]
+      );
+    }
+
     // Executar ação decidida pelo agente
     if (acao === 'adicionar_pratos' && Array.isArray(dados.itens) && dados.itens.length > 0) {
       const mapaPratos = Object.fromEntries(cardapioPratos.map(p => [p.id, p]));
@@ -192,7 +208,186 @@ function auth(req, res, next) {
 
 
 // ============================
-// 📊 DASHBOARD
+// 👤 CRM - CRUD DE CLIENTES
+// ============================
+
+app.get('/admin/clientes', auth, async (req, res) => {
+  try {
+    const clientes = await pool.query(`
+      SELECT c.*, 
+             COUNT(p.id) as total_pedidos,
+             COALESCE(SUM(p.total), 0) as valor_total
+      FROM clientes c
+      LEFT JOIN pedidos p ON c.id = p.cliente_id AND p.status != 'montando'
+      GROUP BY c.id
+      ORDER BY c.criado_em DESC
+    `);
+    
+    res.render('clientes-lista', { clientes: clientes.rows });
+  } catch (error) {
+    console.error('Erro ao listar clientes:', error);
+    res.status(500).send('Erro ao carregar clientes');
+  }
+});
+
+app.get('/admin/clientes/novo', auth, (req, res) => {
+  res.render('clientes-form', { 
+    cliente: {}, 
+    action: '/admin/clientes/novo',
+    title: 'Novo Cliente'
+  });
+});
+
+app.post('/admin/clientes/novo', auth, async (req, res) => {
+  try {
+    const { nome, telefone, endereco, observacoes } = req.body;
+    
+    await pool.query(`
+      INSERT INTO clientes (nome, telefone, endereco, observacoes)
+      VALUES ($1, $2, $3, $4)
+    `, [nome.trim(), telefone.trim(), endereco?.trim(), observacoes?.trim()]);
+    
+    res.redirect('/admin/clientes');
+  } catch (error) {
+    console.error('Erro ao criar cliente:', error);
+    res.status(500).send('Erro ao criar cliente');
+  }
+});
+
+app.get('/admin/clientes/:telefone/editar', auth, async (req, res) => {
+  try {
+    const { telefone } = req.params;
+    const cliente = await pool.query(
+      'SELECT * FROM clientes WHERE telefone = $1',
+      [telefone]
+    );
+    
+    if (cliente.rows.length === 0) {
+      return res.status(404).send('Cliente não encontrado');
+    }
+    
+    res.render('clientes-form', { 
+      cliente: cliente.rows[0], 
+      action: `/admin/clientes/${telefone}/editar`,
+      title: 'Editar Cliente'
+    });
+  } catch (error) {
+    console.error('Erro ao carregar cliente para edição:', error);
+    res.status(500).send('Erro ao carregar cliente');
+  }
+});
+
+app.post('/admin/clientes/:telefone/editar', auth, async (req, res) => {
+  try {
+    const { telefone } = req.params;
+    const { nome, endereco, observacoes } = req.body;
+    
+    await pool.query(`
+      UPDATE clientes 
+      SET nome = $1, endereco = $2, observacoes = $3, atualizado_em = NOW()
+      WHERE telefone = $4
+    `, [nome.trim(), endereco?.trim(), observacoes?.trim(), telefone]);
+    
+    res.redirect('/admin/clientes');
+  } catch (error) {
+    console.error('Erro ao atualizar cliente:', error);
+    res.status(500).send('Erro ao atualizar cliente');
+  }
+});
+
+app.post('/admin/clientes/:telefone/excluir', auth, async (req, res) => {
+  try {
+    const { telefone } = req.params;
+    
+    // Excluir cliente e seus pedidos (em cascata)
+    await pool.query('DELETE FROM clientes WHERE telefone = $1', [telefone]);
+    
+    res.redirect('/admin/clientes');
+  } catch (error) {
+    console.error('Erro ao excluir cliente:', error);
+    res.status(500).send('Erro ao excluir cliente');
+  }
+});
+
+// Removida a rota de limpar testes
+// ============================
+// 👤 CRM - DETALHES DO CLIENTE
+// ============================
+
+app.get('/admin/cliente/:telefone', auth, async (req, res) => {
+  const { telefone } = req.params;
+  
+  try {
+    // Buscar dados do cliente
+    const cliente = await pool.query(
+      'SELECT * FROM clientes WHERE telefone = $1',
+      [telefone]
+    );
+    
+    if (cliente.rows.length === 0) {
+      return res.status(404).send('Cliente não encontrado');
+    }
+    
+    const clienteData = cliente.rows[0];
+    
+    // Buscar todos os pedidos do cliente
+    const pedidos = await pool.query(`
+      SELECT p.*, 
+             array_agg(
+               json_build_object(
+                 'nome_item', ip.nome_item,
+                 'preco', ip.preco,
+                 'quantidade', ip.quantidade
+               )
+             ) as itens
+      FROM pedidos p
+      LEFT JOIN itens_pedido ip ON p.id = ip.pedido_id
+      WHERE p.cliente_id = $1 AND p.status != 'montando'
+      GROUP BY p.id
+      ORDER BY p.criado_em DESC
+    `, [clienteData.id]);
+    
+    // Calcular estatísticas
+    const totalPedidos = pedidos.rows.length;
+    const pedidosFinalizados = pedidos.rows.filter(p => p.status === 'finalizado' || p.status === 'entregue').length;
+    const valorTotal = pedidos.rows.reduce((sum, p) => sum + Number(p.total || 0), 0);
+    const ticketMedio = totalPedidos > 0 ? valorTotal / totalPedidos : 0;
+    
+    // Pratos mais pedidos
+    const todosItens = pedidos.rows.flatMap(p => p.itens || []);
+    const contagemPratos = {};
+    todosItens.forEach(item => {
+      contagemPratos[item.nome_item] = (contagemPratos[item.nome_item] || 0) + item.quantidade;
+    });
+    const pratosFavoritos = Object.entries(contagemPratos)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 5)
+      .map(([nome, quantidade]) => ({ nome, quantidade }));
+    
+    // Último pedido
+    const ultimoPedido = pedidos.rows[0];
+    
+    res.render('cliente-detalhes', {
+      cliente: clienteData,
+      pedidos: pedidos.rows,
+      estatisticas: {
+        totalPedidos,
+        pedidosFinalizados,
+        valorTotal,
+        ticketMedio,
+        pratosFavoritos,
+        ultimoPedido
+      }
+    });
+    
+  } catch (error) {
+    console.error('Erro ao buscar detalhes do cliente:', error);
+    res.status(500).send('Erro ao carregar dados do cliente');
+  }
+});
+
+// ============================
+// �📊 DASHBOARD
 // ============================
 
 app.get('/admin/dashboard', auth, async (req, res) => {

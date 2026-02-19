@@ -246,14 +246,85 @@ async function processarMensagemAgente({ telefone, mensagem, etapa, pedidoAtual,
     return { mensagem: 'Desculpe, o atendimento está temporariamente indisponível. Tente mais tarde.', acao: 'responder', dados: {}, proximaEtapa: etapa };
   }
 
+  const pratosStr = cardapioPratos.map(p => `${p.id}: ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`).join('\n');
+  const bebidasStr = cardapioBebidas.length ? cardapioBebidas.map(b => `${b.id}: ${b.nome} - R$ ${Number(b.preco).toFixed(2)}`).join('\n') : 'Nenhuma bebida no cardápio.';
+  const pedidoStr = pedidoAtual ? pedidoAtual.itens.map(i => `  • ${i.nome_item} x${i.quantidade} - R$ ${(Number(i.preco) * Number(i.quantidade)).toFixed(2)}`).join('\n') + `\nTotal: R$ ${pedidoAtual.total}` : 'Nenhum item no pedido.';
+
+  // === PROCESSAMENTO DE LINGUAGEM NATURAL (ANTES DA IA) ===
+  const msgLower = mensagem.toLowerCase().trim();
+  
+  // Verificar se é um pedido em linguagem natural
+  if (msgLower.includes('maminha') || msgLower.includes('carne de sol') || msgLower.includes('picanha') || msgLower.includes('frango') || msgLower.includes('linguiça') || msgLower.includes('costela') || msgLower.includes('ovo') || 
+      cardapioPratos.some(p => msgLower.includes(p.nome.toLowerCase()))) {
+    let itensEncontrados = [];
+    
+    // Extrair quantidades e pratos
+    const texto = msgLower;
+    
+    // Criar padrões dinâmicos baseados no cardápio atual
+    const padroes = [];
+    
+    // Adicionar padrões para cada prato do cardápio
+    cardapioPratos.forEach(prato => {
+      const nomeNormalizado = prato.nome.toLowerCase().replace(/\s+/g, '\\s*');
+      
+      // Padrão com "de" e opções de quantidade
+      padroes.push(new RegExp(`(\\d+)\\s*(?:quentinha|quentinhas|porção|porções|unidade|unidades)?\\s*de\\s*${nomeNormalizado}`, 'gi'));
+      
+      // Padrão sem "de"
+      padroes.push(new RegExp(`(\\d+)\\s*${nomeNormalizado}`, 'gi'));
+    });
+    
+    // Processar cada padrão
+    padroes.forEach(padrao => {
+      let match;
+      while ((match = padrao.exec(texto)) !== null) {
+        const quantidade = parseInt(match[1]);
+        const pratoTexto = match[0].toLowerCase();
+        
+        // Encontrar o prato correspondente no cardápio
+        const pratoEncontrado = cardapioPratos.find(p => {
+          const nomePrato = p.nome.toLowerCase();
+          return pratoTexto.includes(nomePrato);
+        });
+        
+        if (pratoEncontrado && quantidade > 0) {
+          itensEncontrados.push({ id: pratoEncontrado.id, quantidade: Math.min(quantidade, 99) });
+        }
+      }
+    });
+    
+    // Se não encontrou com padrões, busca simples baseada no cardápio
+    if (itensEncontrados.length === 0) {
+      cardapioPratos.forEach(prato => {
+        const nomePrato = prato.nome.toLowerCase();
+        if (msgLower.includes(nomePrato)) {
+          itensEncontrados.push({ id: prato.id, quantidade: 1 });
+        }
+      });
+    }
+    
+    if (itensEncontrados.length > 0) {
+      const nomesItens = itensEncontrados.map(i => {
+        const item = cardapioPratos.find(p => p.id === i.id);
+        const quantidade = i.quantidade > 1 ? `${i.quantidade}x ` : '';
+        return item ? `${quantidade}${item.nome}` : null;
+      }).filter(Boolean).join(', ');
+      
+      return { 
+        mensagem: `🎯 *Pedido anotado com sucesso!* 📝\n\n${nomesItens}\n\n✨ Ótima escolha! Mais alguma coisa? Quer adicionar alguma bebida para acompanhar? 🥤`, 
+        acao: 'adicionar_pratos', 
+        dados: { itens: itensEncontrados }, 
+        proximaEtapa: 'escolhendo_pratos' 
+      };
+    }
+  }
+
+  // === CHAMADA DA IA (SE NÃO FOR PEDIDO DIRETO) ===
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.0-flash',
     systemInstruction: INSTRUCOES_SISTEMA,
   });
-
-  const pratosStr = cardapioPratos.map(p => `${p.id}: ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`).join('\n');
-  const bebidasStr = cardapioBebidas.length ? cardapioBebidas.map(b => `${b.id}: ${b.nome} - R$ ${Number(b.preco).toFixed(2)}`).join('\n') : 'Nenhuma bebida no cardápio.';
-  const pedidoStr = pedidoAtual ? pedidoAtual.itens.map(i => `  • ${i.nome_item} x${i.quantidade} - R$ ${(Number(i.preco) * Number(i.quantidade)).toFixed(2)}`).join('\n') + `\nTotal: R$ ${pedidoAtual.total}` : 'Nenhum item no pedido.';
 
   const prompt = `Você é o atendente do restaurante. Decida o que fazer com base na mensagem do cliente e no contexto.
 
@@ -339,20 +410,35 @@ Para outras ações, dados pode ser {}.`;
       
       // Welcome and engagement - Agent personality
       if (msgLower.includes('oi') || msgLower.includes('ola') || msgLower.includes('bom dia') || msgLower.includes('boa tarde') || msgLower.includes('boa noite')) {
+        // Se já tem etapa de coletando nome, não perguntar novamente
+        if (etapaAtual === 'coletando_nome') {
+          return { 
+            mensagem: `Prazer em conhecer, ${mensagem}! 👋 Agora vamos ao cardápio! 🍽️ *NOSSO CARDÁPIO - FIQUE A VONTADE!*\n\n${pratosStr}\n\n${bebidasStr}\n\n😋 Temos opções maravilhosas! Para fazer seu pedido, me diga os números (ex: "quero 1 e 3") ou descreva o que está com vontade! Posso anotar agora?`, 
+            acao: 'salvar_nome_mostrar_cardapio', 
+            dados: { nome: mensagem }, 
+            proximaEtapa: 'escolhendo_pratos' 
+          };
+        }
+        
         return { 
-          mensagem: 'Olá! 👋 Seja bem-vindo ao nosso restaurante! Sou seu atendente virtual e estou aqui para ajudar. Quer ver nosso cardápio de pratos deliciosos?', 
-          acao: 'mostrar_cardapio_pratos', 
+          mensagem: 'Olá! 👋 Seja bem-vindo ao nosso restaurante! Sou seu atendente virtual e estou aqui para ajudar. Antes de continuar, qual é o seu nome?', 
+          acao: 'solicitar_nome', 
           dados: {}, 
-          proximaEtapa: 'escolhendo_pratos' 
+          proximaEtapa: 'coletando_nome' 
         };
       }
       
       // RESPOSTA POSITIVA - Mostrar cardápio com entusiasmo
       if (temPositiva && !temNegativa) {
-        const entusiasmo = msgLower.includes('claro') ? 'Claro que sim! ' : 
-                        msgLower.includes('com certeza') ? 'Com certeza! ' :
-                        msgLower.includes('gostaria') ? 'Com certeza! ' :
-                        'Perfeito! ';
+        // Se está coletando nome, salvar e continuar
+        if (etapa === 'coletando_nome') {
+          return { 
+            mensagem: `${entusiasmo}Prazer em conhecer, ${mensagem}! 👋 Agora vamos ao cardápio! 🍽️ *NOSSO CARDÁPIO - FIQUE A VONTADE!*\n\n${pratosStr}\n\n${bebidasStr}\n\n😋 Temos opções maravilhosas! Para fazer seu pedido, me diga os números (ex: "quero 1 e 3") ou descreva o que está com vontade! Posso anotar agora?`, 
+            acao: 'salvar_nome_mostrar_cardapio', 
+            dados: { nome: mensagem }, 
+            proximaEtapa: 'escolhendo_pratos' 
+          };
+        }
         
         return { 
           mensagem: `${entusiasmo}🍽️ *NOSSO CARDÁPIO - FIQUE A VONTADE!*\n\n${pratosStr}\n\n${bebidasStr}\n\n😋 Temos opções maravilhosas! Para fazer seu pedido, me diga os números (ex: "quero 1 e 3") ou descreva o que está com vontade! Posso anotar agora?`, 
@@ -419,30 +505,20 @@ Para outras ações, dados pode ser {}.`;
         }
       }
       
-      // Natural language processing - Smart keyword detection
-      if (msgLower.includes('maminha') || msgLower.includes('carne de sol') || msgLower.includes('picanha') || msgLower.includes('frango') || msgLower.includes('linguiça')) {
-        let itensEncontrados = [];
-        if (msgLower.includes('maminha')) itensEncontrados.push({ id: 1, quantidade: 1 });
-        if (msgLower.includes('carne de sol')) itensEncontrados.push({ id: 2, quantidade: 1 });
-        if (msgLower.includes('picanha')) itensEncontrados.push({ id: 3, quantidade: 1 });
-        if (msgLower.includes('frango')) itensEncontrados.push({ id: 4, quantidade: 1 });
-        if (msgLower.includes('linguiça')) itensEncontrados.push({ id: 5, quantidade: 1 });
-        
-        if (itensEncontrados.length > 0) {
-          const nomesItens = itensEncontrados.map(i => cardapioPratos.find(p => p.id === i.id)?.nome).join(', ');
-          return { 
-            mensagem: `🎯 *Entendi perfeitamente!* Anotei seu pedido: ${nomesItens}. Ótimo paladar! Mais algo? Quer adicionar alguma bebida? 🥤`, 
-            acao: 'adicionar_pratos', 
-            dados: { itens: itensEncontrados }, 
-            proximaEtapa: 'escolhendo_pratos' 
-          };
-        }
-      }
-      
       // Ready/confirmation - Natural
       if (msgLower.includes('pronto') || msgLower.includes('é isso') || msgLower.includes('só isso') || msgLower.includes('pode ser')) {
+        // Se for entrega, solicitar endereço
+        if (etapaAtual === 'escolhendo_pratos' || etapaAtual === 'escolhendo_bebidas') {
+          return { 
+            mensagem: '👍 *Perfeito!* Antes de finalizar, será entrega ou retirada? Se for entrega, por favor me informe seu endereço completo! 📍', 
+            acao: 'solicitar_endereco_entrega', 
+            dados: {}, 
+            proximaEtapa: 'confirmando_entrega' 
+          };
+        }
+        
         return { 
-          mensagem: '� *Perfeito!* Vou preparar seu pedido! Quer adicionar alguma bebida ou podemos fechar por aqui? 🥤', 
+          mensagem: '👍 *Perfeito!* Vou preparar seu pedido! Quer adicionar alguma bebida ou podemos fechar por aqui? 🥤', 
           acao: 'oferecer_bebidas', 
           dados: {}, 
           proximaEtapa: 'escolhendo_bebidas' 
