@@ -241,7 +241,7 @@ Responda APENAS JSON: [{"id":n,"quantidade":n},...]. Se não for pedido, [].`;
  * Recebe o contexto completo e retorna { mensagem, acao, dados, proximaEtapa }.
  * O servidor apenas executa o que o agente decidir.
  */
-async function processarMensagemAgente({ telefone, mensagem, etapa, pedidoAtual, cardapioPratos, cardapioBebidas }) {
+async function processarMensagemAgente({ telefone, mensagem, etapa, pedidoAtual, cardapioPratos, cardapioBebidas, dadosCliente }) {
   if (!process.env.GEMINI_API_KEY) {
     return { mensagem: 'Desculpe, o atendimento está temporariamente indisponível. Tente mais tarde.', acao: 'responder', dados: {}, proximaEtapa: etapa };
   }
@@ -250,77 +250,7 @@ async function processarMensagemAgente({ telefone, mensagem, etapa, pedidoAtual,
   const bebidasStr = cardapioBebidas.length ? cardapioBebidas.map(b => `${b.id}: ${b.nome} - R$ ${Number(b.preco).toFixed(2)}`).join('\n') : 'Nenhuma bebida no cardápio.';
   const pedidoStr = pedidoAtual ? pedidoAtual.itens.map(i => `  • ${i.nome_item} x${i.quantidade} - R$ ${(Number(i.preco) * Number(i.quantidade)).toFixed(2)}`).join('\n') + `\nTotal: R$ ${pedidoAtual.total}` : 'Nenhum item no pedido.';
 
-  // === PROCESSAMENTO DE LINGUAGEM NATURAL (ANTES DA IA) ===
-  const msgLower = mensagem.toLowerCase().trim();
-  
-  // Verificar se é um pedido em linguagem natural
-  if (msgLower.includes('maminha') || msgLower.includes('carne de sol') || msgLower.includes('picanha') || msgLower.includes('frango') || msgLower.includes('linguiça') || msgLower.includes('costela') || msgLower.includes('ovo') || 
-      cardapioPratos.some(p => msgLower.includes(p.nome.toLowerCase()))) {
-    let itensEncontrados = [];
-    
-    // Extrair quantidades e pratos
-    const texto = msgLower;
-    
-    // Criar padrões dinâmicos baseados no cardápio atual
-    const padroes = [];
-    
-    // Adicionar padrões para cada prato do cardápio
-    cardapioPratos.forEach(prato => {
-      const nomeNormalizado = prato.nome.toLowerCase().replace(/\s+/g, '\\s*');
-      
-      // Padrão com "de" e opções de quantidade
-      padroes.push(new RegExp(`(\\d+)\\s*(?:quentinha|quentinhas|porção|porções|unidade|unidades)?\\s*de\\s*${nomeNormalizado}`, 'gi'));
-      
-      // Padrão sem "de"
-      padroes.push(new RegExp(`(\\d+)\\s*${nomeNormalizado}`, 'gi'));
-    });
-    
-    // Processar cada padrão
-    padroes.forEach(padrao => {
-      let match;
-      while ((match = padrao.exec(texto)) !== null) {
-        const quantidade = parseInt(match[1]);
-        const pratoTexto = match[0].toLowerCase();
-        
-        // Encontrar o prato correspondente no cardápio
-        const pratoEncontrado = cardapioPratos.find(p => {
-          const nomePrato = p.nome.toLowerCase();
-          return pratoTexto.includes(nomePrato);
-        });
-        
-        if (pratoEncontrado && quantidade > 0) {
-          itensEncontrados.push({ id: pratoEncontrado.id, quantidade: Math.min(quantidade, 99) });
-        }
-      }
-    });
-    
-    // Se não encontrou com padrões, busca simples baseada no cardápio
-    if (itensEncontrados.length === 0) {
-      cardapioPratos.forEach(prato => {
-        const nomePrato = prato.nome.toLowerCase();
-        if (msgLower.includes(nomePrato)) {
-          itensEncontrados.push({ id: prato.id, quantidade: 1 });
-        }
-      });
-    }
-    
-    if (itensEncontrados.length > 0) {
-      const nomesItens = itensEncontrados.map(i => {
-        const item = cardapioPratos.find(p => p.id === i.id);
-        const quantidade = i.quantidade > 1 ? `${i.quantidade}x ` : '';
-        return item ? `${quantidade}${item.nome}` : null;
-      }).filter(Boolean).join(', ');
-      
-      return { 
-        mensagem: `🎯 *Pedido anotado com sucesso!* 📝\n\n${nomesItens}\n\n✨ Ótima escolha! Mais alguma coisa? Quer adicionar alguma bebida para acompanhar? 🥤`, 
-        acao: 'adicionar_pratos', 
-        dados: { itens: itensEncontrados }, 
-        proximaEtapa: 'escolhendo_pratos' 
-      };
-    }
-  }
-
-  // === CHAMADA DA IA (SE NÃO FOR PEDIDO DIRETO) ===
+  // === CHAMADA DA IA ===
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.0-flash',
     systemInstruction: INSTRUCOES_SISTEMA,
@@ -380,6 +310,78 @@ Para outras ações, dados pode ser {}.`;
       const msgLower = mensagem.toLowerCase().trim();
       const etapaAtual = etapa === 'start' ? 'inicio' : etapa;
       
+      // === PROCESSAMENTO DE LINGUAGEM NATURAL (FORA DA IA) ===
+      
+      // Verificar se é um pedido em linguagem natural
+      if (msgLower.includes('maminha') || msgLower.includes('carne de sol') || msgLower.includes('picanha') || msgLower.includes('frango') || msgLower.includes('linguiça') || msgLower.includes('costela') || msgLower.includes('ovo') || 
+          cardapioPratos.some(p => msgLower.includes(p.nome.toLowerCase()))) {
+        let itensEncontrados = [];
+        
+        // Extrair quantidades e pratos
+        const texto = msgLower;
+        
+        // Criar padrões dinâmicos baseados no cardápio atual
+        const padroes = [];
+        
+        // Adicionar padrões para cada prato do cardápio
+        cardapioPratos.forEach(prato => {
+          const nomeNormalizado = prato.nome.toLowerCase().replace(/\s+/g, '\\s*');
+          
+          // Padrão com "de" e opções de quantidade
+          padroes.push(new RegExp(`(\\d+)\\s*(?:quentinha|quentinhas|porção|porções|unidade|unidades)?\\s*de\\s*${nomeNormalizado}`, 'gi'));
+          
+          // Padrão sem "de"
+          padroes.push(new RegExp(`(\\d+)\\s*${nomeNormalizado}`, 'gi'));
+        });
+        
+        // Processar cada padrão
+        padroes.forEach(padrao => {
+          let match;
+          while ((match = padrao.exec(texto)) !== null) {
+            const quantidade = parseInt(match[1]);
+            const pratoTexto = match[0].toLowerCase();
+            
+            // Encontrar o prato correspondente no cardápio
+            const pratoEncontrado = cardapioPratos.find(p => {
+              const nomePrato = p.nome.toLowerCase();
+              return pratoTexto.includes(nomePrato);
+            });
+            
+            if (pratoEncontrado && quantidade > 0) {
+              itensEncontrados.push({ id: pratoEncontrado.id, quantidade: Math.min(quantidade, 99) });
+            }
+          }
+        });
+        
+        // Se não encontrou com padrões, busca simples baseada no cardápio
+        if (itensEncontrados.length === 0) {
+          cardapioPratos.forEach(prato => {
+            const nomePrato = prato.nome.toLowerCase();
+            if (msgLower.includes(nomePrato)) {
+              itensEncontrados.push({ id: prato.id, quantidade: 1 });
+            }
+          });
+        }
+        
+        // Se encontrou itens, monta resposta
+        if (itensEncontrados.length > 0) {
+          const nomesItens = itensEncontrados.map(item => {
+            const prato = cardapioPratos.find(p => p.id === item.id);
+            return `${item.quantidade}x ${prato.nome}`;
+          }).join(', ');
+          
+          const comentarios = itensEncontrados.length > 1 ? 'Ótimas escolhas! ' : 'Ótima escolha! ';
+          const comentarios2 = itensEncontrados.length > 1 ? 'Anotados: ' : 'Anotado: ';
+          
+          return { 
+            mensagem: `✨ *Ótima escolha!* ${comentarios}${comentarios2}${nomesItens}. Mais alguma coisa? Quer adicionar alguma bebida para acompanhar? 🥤`, 
+            acao: 'adicionar_pratos', 
+            dados: { itens: itensEncontrados }, 
+            proximaEtapa: 'escolhendo_pratos' 
+          };
+        }
+      }
+      
       // === SISTEMA DE RECONHECIMENTO DE SENTIMENTOS E INTENÇÕES ===
       
       // Palavras POSITIVAS - Aceitação, confirmação, interesse
@@ -410,12 +412,15 @@ Para outras ações, dados pode ser {}.`;
       
       // Welcome and engagement - Agent personality
       if (msgLower.includes('oi') || msgLower.includes('ola') || msgLower.includes('bom dia') || msgLower.includes('boa tarde') || msgLower.includes('boa noite')) {
-        // Se já tem etapa de coletando nome, não perguntar novamente
-        if (etapaAtual === 'coletando_nome') {
+        // Verificar se cliente já existe no banco
+        const clienteExistente = dadosCliente && dadosCliente.nome;
+        
+        if (clienteExistente) {
+          const nomeCliente = dadosCliente.nome;
           return { 
-            mensagem: `Prazer em conhecer, ${mensagem}! 👋 Agora vamos ao cardápio! 🍽️ *NOSSO CARDÁPIO - FIQUE A VONTADE!*\n\n${pratosStr}\n\n${bebidasStr}\n\n😋 Temos opções maravilhosas! Para fazer seu pedido, me diga os números (ex: "quero 1 e 3") ou descreva o que está com vontade! Posso anotar agora?`, 
-            acao: 'salvar_nome_mostrar_cardapio', 
-            dados: { nome: mensagem }, 
+            mensagem: `Olá novamente, ${nomeCliente}! 👋 Que bom que você voltou! 😊 Posso ajudar com seu pedido de hoje ou quer ver nosso cardápio? 🍽️`, 
+            acao: 'mostrar_cardapio_pratos', 
+            dados: {}, 
             proximaEtapa: 'escolhendo_pratos' 
           };
         }

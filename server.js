@@ -67,7 +67,8 @@ app.post('/whatsapp', async (req, res) => {
     } : null;
 
     const resultado = await processarMensagemAgente({
-      telefone, mensagem, etapa, pedidoAtual, cardapioPratos, cardapioBebidas
+      telefone, mensagem, etapa, pedidoAtual, cardapioPratos, cardapioBebidas, 
+      dadosCliente: clienteData // Passar dados do cliente para o agente
     });
 
     const { mensagem: msgResposta, acao, dados, proximaEtapa } = resultado;
