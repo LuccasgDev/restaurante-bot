@@ -7,16 +7,24 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-const INSTRUCOES_SISTEMA = `Você é o atendente virtual de um restaurante, falando pelo WhatsApp.
-Seu tom é sempre cordial, humano e prestativo — como um atendente real, não um robô.
-Regras:
-- Responda SEMPRE em português do Brasil, de forma curta (ideal para WhatsApp).
-- Use uma ou duas frases por vez quando possível; se precisar listar itens, seja claro.
-- Pode usar emojis com moderação (👋 🍽️ 👍 🙏).
+const INSTRUCOES_SISTEMA = `Você é o atendente do restaurante, atendendo clientes pelo WhatsApp. O cliente deve sentir que está falando com uma pessoa real, não com um robô.
+
+PERSONALIDADE:
+- Simpático, caloroso e natural — como aquele garçom que trata todo mundo bem.
+- Converse de forma fluida. Reconheça o que o cliente disse antes de seguir (ex: "1 maminha e 2 carne de sol, anotado!").
+- Varie suas respostas — não repita sempre as mesmas frases. Use expressões coloquiais brasileiras.
+- Seja breve, mas humano. WhatsApp exige mensagens curtas, mas não frias.
+- Use emojis com moderação e naturalidade (👋 🍽️ 👍 🙏 😊).
+
+COMPORTAMENTO:
+- Sempre ACUSE RECEBIMENTO do que o cliente pediu ou disse. "Entendi!", "Anotado!", "Ótima escolha!", "Perfeito!".
+- Se o cliente fez um pedido, confirme os itens com entusiasmo antes de perguntar o próximo passo.
+- Faça sugestões naturais quando fizer sentido ("Quer algo para acompanhar?", "A carne de sol combina bem com...").
+- Em caso de dúvida ou pedido não entendido, peça gentilmente para repetir, sem soar robótico.
 - NUNCA invente preços, pratos ou informações que não forem passadas nos dados.
-- Inclua obrigatoriamente as informações que forem pedidas nos "dados" (ex.: lista do cardápio, resumo do pedido).
-- Não use markdown pesado; pode usar *negrito* para títulos ou valores.
-- Assine como o restaurante, não como "assistente" ou "IA".`;
+- SEMPRE inclua as informações obrigatórias dos "dados" (cardápio, resumo, total, etc.) quando indicado.
+- Use *negrito* para destacar valores ou títulos importantes.
+- Nunca diga que é "assistente", "IA" ou "bot". Você é o atendente do restaurante.`;
 
 /**
  * Gera uma resposta humanizada do agente.
@@ -24,7 +32,7 @@ Regras:
  * @param {string} opts.etapa - Etapa atual do fluxo (ex: saudacao, cardapio_pratos, resumo_pedido)
  * @param {string} opts.mensagemCliente - Última mensagem do cliente
  * @param {string} [opts.contexto] - Texto extra para a IA (ex: "Cliente acabou de ver o cardápio")
- * @param {Object} [opts.dados] - Dados estruturados: listaPratos, listaBebidas, itensAdicionados, resumoPedido, total, formaPagamento, comanda
+ * @param {Object} [opts.dados] - Dados estruturados: listaPratos, listaBebidas, itensAdicionados, resumoPedido, total, formaPagamento, comanda, pedidoAtual
  * @returns {Promise<string>} Mensagem para enviar ao cliente
  */
 async function gerarRespostaAgente({ etapa, mensagemCliente, contexto = '', dados = {} }) {
@@ -38,24 +46,25 @@ async function gerarRespostaAgente({ etapa, mensagemCliente, contexto = '', dado
   });
 
   const partes = [
-    `Etapa atual do atendimento: ${etapa}.`,
+    `Etapa atual: ${etapa}.`,
     contexto ? `Contexto: ${contexto}` : '',
     `Mensagem do cliente: "${mensagemCliente}"`,
   ];
 
   if (Object.keys(dados).length > 0) {
-    partes.push('\nDados que você DEVE usar na resposta (inclua quando fizer sentido):');
+    partes.push('\nDados que você DEVE usar (inclua quando fizer sentido):');
+    if (dados.pedidoAtual) partes.push(`O que o cliente já pediu até agora: ${dados.pedidoAtual}`);
     if (dados.listaPratos) partes.push(`Cardápio pratos:\n${dados.listaPratos}`);
     if (dados.listaBebidas) partes.push(`Cardápio bebidas:\n${dados.listaBebidas}`);
-    if (dados.itensAdicionados) partes.push(`Itens que acabaram de ser adicionados: ${dados.itensAdicionados}`);
+    if (dados.itensAdicionados) partes.push(`Itens que ACABARAM de ser adicionados: ${dados.itensAdicionados} — reconheça isso na sua resposta.`);
     if (dados.resumoPedido) partes.push(`Resumo do pedido:\n${dados.resumoPedido}`);
-    if (dados.total != null) partes.push(`Total do pedido: R$ ${Number(dados.total).toFixed(2)}`);
-    if (dados.formaPagamento) partes.push(`Forma de pagamento escolhida: ${dados.formaPagamento}`);
+    if (dados.total != null) partes.push(`Total: R$ ${Number(dados.total).toFixed(2)}`);
+    if (dados.formaPagamento) partes.push(`Forma de pagamento: ${dados.formaPagamento}`);
     if (dados.comanda) partes.push(`Texto da comanda (enviar em seguida):\n${dados.comanda}`);
     if (dados.opcoesPagamento) partes.push(`Opções de pagamento: ${dados.opcoesPagamento}`);
   }
 
-  partes.push('\nGere APENAS a mensagem que o atendente deve enviar ao cliente. Uma única resposta, natural e humanizada.');
+  partes.push('\nGere APENAS a mensagem que você enviaria ao cliente. Natural, calorosa, como um atendente real. Sem prefixos tipo "Como atendente..." — só a mensagem.');
 
   const prompt = partes.filter(Boolean).join('\n');
 
@@ -90,11 +99,11 @@ Etapa atual da conversa: ${etapa}
 Mensagem do cliente: "${mensagemCliente.trim()}"
 
 Intenções possíveis (responda APENAS com uma dessas palavras, nada mais):
-- QUER_VER_CARDAPIO: cliente quer ver o cardápio (ex: "sim", "quero", "pode mostrar", "mostra o cardápio", "me manda o cardápio", "cardápio de novo")
+- QUER_VER_CARDAPIO: cliente quer ver o cardápio ou está engajando (ex: "sim", "quero", "pode", "e aí", "fala", "opa", "mostra o cardápio", "me manda")
 - VER_CARDAPIO: cliente pede para ver o cardápio novamente (ex: "mostra de novo", "pode mostrar o cardápio novamente", "ver o cardápio de novo")
 - CANCELAR: cliente quer desistir, encerrar, não quer mais (ex: "não quero mais", "obrigado até a próxima", "cancelar", "deixa pra lá", "sair")
 - PRONTO: cliente terminou de escolher (ex: "pronto", "é isso", "só isso", "pode ser")
-- ESCOLHER_ITENS: cliente está informando números de itens (ex: "1 2", "quero o 1 e 3")
+- ESCOLHER_ITENS: cliente está fazendo pedido — números (ex: "1 2") ou linguagem natural (ex: "quero 1 maminha e 2 carne de sol")
 - NAO_QUERO_BEBIDA: não quer bebida (ex: "não", "não quero", "obrigado não")
 - CONFIRMAR_SIM: confirma que o pedido está certo (ex: "sim", "está certo", "confirmo")
 - CONFIRMAR_NAO: não confirma o pedido (ex: "não", "errado")
@@ -117,4 +126,53 @@ Responda com UMA ÚNICA PALAVRA da lista.`;
   }
 }
 
-module.exports = { gerarRespostaAgente, detectarIntent };
+/**
+ * Interpreta pedido em linguagem natural e retorna lista de itens com quantidade.
+ * Ex: "quero um de Maminha e dois de carne de sol" → [{ id: 1, quantidade: 1 }, { id: 2, quantidade: 2 }]
+ * @param {string} mensagemCliente - Mensagem do cliente (ex: "quero 2 maminha e 1 linguiça")
+ * @param {Array<{id: number, nome: string}>} listaItens - Cardápio (pratos ou bebidas) com id e nome
+ * @returns {Promise<Array<{id: number, quantidade: number}>>} Lista de itens com quantidade, ou [] se não interpretar
+ */
+async function interpretarPedidoNatural(mensagemCliente, listaItens) {
+  if (!process.env.GEMINI_API_KEY || !mensagemCliente?.trim() || !listaItens?.length) {
+    return [];
+  }
+
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  const cardapioStr = listaItens.map(i => `${i.id}: ${i.nome}`).join(', ');
+
+  const prompt = `Você é um interpretador de pedidos de restaurante. O cliente escreveu em linguagem natural.
+
+Cardápio disponível (id: nome): ${cardapioStr}
+
+Mensagem do cliente: "${mensagemCliente.trim()}"
+
+Extraia os itens pedidos e suas quantidades. Se o cliente não especificar quantidade, assuma 1.
+Exemplos:
+- "quero um de Maminha e dois de carne de sol" → [{"id":1,"quantidade":1},{"id":2,"quantidade":2}]
+- "2 maminha e 1 linguiça" → [{"id":1,"quantidade":2},{"id":5,"quantidade":1}]
+- "quero o 1 e o 3" → [{"id":1,"quantidade":1},{"id":3,"quantidade":1}]
+- "só quero falar com alguém" → []
+
+Responda APENAS com um JSON válido: array de objetos {"id": número, "quantidade": número}. Nada mais. Se não for pedido de itens, responda [].`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const text = (result.response && result.response.text() || '').trim();
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed)) return [];
+
+    const idsValidos = new Set(listaItens.map(i => i.id));
+    return parsed
+      .filter(p => p && typeof p.id === 'number' && typeof p.quantidade === 'number' && p.quantidade > 0 && idsValidos.has(p.id))
+      .map(p => ({ id: Number(p.id), quantidade: Math.min(99, Math.floor(p.quantidade)) }));
+  } catch (err) {
+    console.error('[Agente IA] Erro ao interpretar pedido:', err.message);
+    return [];
+  }
+}
+
+module.exports = { gerarRespostaAgente, detectarIntent, interpretarPedidoNatural };

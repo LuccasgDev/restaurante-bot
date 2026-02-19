@@ -5,7 +5,7 @@ const session = require('express-session');
 const bcrypt = require('bcrypt');
 const pool = require('./db');
 const { twiml: { MessagingResponse } } = require('twilio');
-const { gerarRespostaAgente, detectarIntent } = require('./agente');
+const { gerarRespostaAgente, detectarIntent, interpretarPedidoNatural } = require('./agente');
 
 const app = express();
 
@@ -31,6 +31,16 @@ app.get('/', (req, res) => {
 // Extrai números da mensagem (ex: "1 2 3", "1 e 2", "quero o 1")
 function extrairNumeros(texto) {
   return (texto.replace(/\s+e\s+/g, ' ').match(/\d+/g) || []).map(Number);
+}
+
+// Extrai itens com quantidade a partir de números (ex: "1 2 2" → [{id:1,qtd:1}, {id:2,qtd:2}])
+function extrairItensComQuantidade(texto) {
+  const nums = extrairNumeros(texto);
+  const contagem = {};
+  for (const n of nums) {
+    contagem[n] = (contagem[n] || 0) + 1;
+  }
+  return Object.entries(contagem).map(([id, qtd]) => ({ id: Number(id), quantidade: qtd }));
 }
 
 // Verifica se a mensagem é "sim" / "quero ver" / "claro" etc.
@@ -108,8 +118,8 @@ app.post('/whatsapp', async (req, res) => {
       await responder(twiml, {
         etapa: 'saudacao_inicial',
         mensagemCliente: mensagem,
-        contexto: 'Cliente acabou de iniciar a conversa. Cumprimente e ofereça o cardápio da noite de forma acolhedora.',
-      }, "Boa noite! 👋\n\nGostaria de ver nosso cardápio para essa noite?\n\nResponda *sim* ou *claro* para ver o cardápio.");
+        contexto: 'Cliente mandou a primeira mensagem (oi, boa noite, etc). Cumprimente como atendente real, de forma calorosa, e ofereça o cardápio naturalmente.',
+      }, "Boa noite! 👋 Tudo bem?\n\nGostaria de ver nosso cardápio para hoje? É só responder *sim* ou *claro*.");
       await pool.query(
         'UPDATE clientes SET etapa=$1 WHERE id=$2',
         ['aguardando_cardapio', clienteData.id]
@@ -123,8 +133,8 @@ app.post('/whatsapp', async (req, res) => {
         await responder(twiml, {
           etapa: 'aguardando_querer_cardapio',
           mensagemCliente: mensagem,
-          contexto: 'Cliente ainda não pediu o cardápio. Convide com gentileza.',
-        }, "Quando quiser ver o cardápio, é só dizer *sim* ou *claro*.");
+          contexto: 'Cliente pode ter cumprimentado (oi, tudo bem), feito pergunta ou dado outra resposta. Responda de forma natural e calorosa, como um atendente real, e convide a ver o cardápio.',
+        }, "Oi! Tudo certo por aí? 😊\n\nQuando quiser ver o cardápio, é só dizer *sim* ou *claro*!");
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         return res.end(twiml.toString());
       }
@@ -141,7 +151,7 @@ app.post('/whatsapp', async (req, res) => {
         mensagemCliente: mensagem,
         contexto: 'Cliente pediu o cardápio. Mostre a lista de pratos e explique que ele pode digitar os números desejados (ex: 1 2) e *pronto* quando terminar.',
         dados: { listaPratos },
-      }, `🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os *números* dos pratos que deseja (ex: 1 2 ou 1 e 2). Quando terminar, digite *pronto*.`);
+      }, `🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os números (ex: 1 2) ou peça em texto (ex: *quero 1 maminha e 2 carne de sol*). Quando terminar, digite *pronto*.`);
       await pool.query(
         'UPDATE clientes SET etapa=$1 WHERE id=$2',
         ['escolhendo_pratos', clienteData.id]
@@ -156,8 +166,8 @@ app.post('/whatsapp', async (req, res) => {
         await responder(twiml, {
           etapa: 'cliente_desistiu',
           mensagemCliente: mensagem,
-          contexto: 'Cliente desistiu do pedido ou quis encerrar. Despeça-se com educação e diga que pode mandar oi quando quiser.',
-        }, "Tudo bem! Quando quiser, é só mandar *oi*. Até a próxima! 👋");
+          contexto: 'Cliente desistiu ou quis encerrar. Despeça-se de forma calorosa e humana, como um atendente real. Diga que estará à disposição quando quiser.',
+        }, "Tudo bem! Sem problemas. 😊 Quando quiser, é só mandar um *oi* que a gente atende. Até a próxima! 👋");
         await pool.query('UPDATE clientes SET etapa=$1 WHERE id=$2', ['inicio', clienteData.id]);
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         return res.end(twiml.toString());
@@ -171,7 +181,7 @@ app.post('/whatsapp', async (req, res) => {
         const listaPratos = pratos.rows.map(p =>
           `${p.id} - ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`
         ).join('\n');
-        twiml.message(`🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os *números* dos pratos que deseja (ex: 1 2 ou 1 e 2). Quando terminar, digite *pronto*.`);
+        twiml.message(`🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os números (ex: 1 2) ou peça em texto (ex: *quero 1 maminha e 2 carne de sol*). Quando terminar, digite *pronto*.`);
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         return res.end(twiml.toString());
       }
@@ -194,7 +204,7 @@ app.post('/whatsapp', async (req, res) => {
         const listaPratos = pratos.rows.map(p =>
           `${p.id} - ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`
         ).join('\n');
-        twiml.message(`🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os *números* dos pratos que deseja (ex: 1 2 ou 1 e 2). Quando terminar, digite *pronto*.`);
+        twiml.message(`🍽️ *CARDÁPIO - PRATOS*\n\n${listaPratos}\n\nDigite os números (ex: 1 2) ou peça em texto (ex: *quero 1 maminha e 2 carne de sol*). Quando terminar, digite *pronto*.`);
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         return res.end(twiml.toString());
       }
@@ -208,8 +218,8 @@ app.post('/whatsapp', async (req, res) => {
           await responder(twiml, {
             etapa: 'lembrete_escolher_pratos',
             mensagemCliente: mensagem,
-            contexto: 'Cliente disse pronto mas ainda não escolheu nenhum prato. Peça os números dos itens com gentileza.',
-          }, "Você ainda não escolheu nenhum prato. Digite os números dos itens (ex: 1 2) ou *pronto* só quando terminar.");
+            contexto: 'Cliente disse pronto mas ainda não escolheu prato. De forma gentil e sem soar cobrando, peça para escolher os itens.',
+          }, "Calma, ainda não anotei nada! 😅 Escolha os pratos — pode digitar os números (ex: 1 2) ou escrever *quero 1 maminha e 2 carne de sol*. Quando terminar, aí sim *pronto*.");
           res.writeHead(200, { 'Content-Type': 'text/xml' });
           return res.end(twiml.toString());
         }
@@ -224,9 +234,9 @@ app.post('/whatsapp', async (req, res) => {
         await responder(twiml, {
           etapa: 'oferta_bebidas_e_cardapio_bebidas',
           mensagemCliente: mensagem,
-          contexto: 'Cliente terminou de escolher os pratos. Ofereça bebidas e mostre o cardápio de bebidas; diga que pode digitar os números ou *não* se não quiser.',
+          contexto: 'Cliente finalizou os pratos. Reconheça e ofereça bebidas com entusiasmo. Mostre o cardápio e diga que pode digitar números ou *não*.',
           dados: { listaBebidas },
-        }, `Perfeito! Gostaria de algo para beber? 🥤\n\n*CARDÁPIO - BEBIDAS*\n\n${listaBebidas}\n\nDigite os números das bebidas ou *não* se não quiser.`);
+        }, `Pratos anotados! 👍\n\nGostaria de algo para beber? 🥤\n\n*CARDÁPIO - BEBIDAS*\n\n${listaBebidas}\n\nDigite os números ou *não* se não quiser.`);
         await pool.query(
           'UPDATE clientes SET etapa=$1 WHERE id=$2',
           ['escolhendo_bebidas', clienteData.id]
@@ -235,21 +245,30 @@ app.post('/whatsapp', async (req, res) => {
         return res.end(twiml.toString());
       }
 
-      const ids = [...new Set(extrairNumeros(mensagemLower))];
-      if (ids.length === 0) {
+      let itensPedido = extrairItensComQuantidade(mensagemLower);
+      if (itensPedido.length === 0) {
+        const pratosCardapio = await pool.query(
+          "SELECT id, nome FROM cardapio WHERE ativo=true AND (categoria='prato' OR categoria IS NULL) ORDER BY id"
+        );
+        itensPedido = await interpretarPedidoNatural(mensagem, pratosCardapio.rows);
+      }
+      if (itensPedido.length === 0) {
         await responder(twiml, {
-          etapa: 'escolhendo_pratos_aguardando_numeros',
+          etapa: 'escolhendo_pratos_sem_pedido_claro',
           mensagemCliente: mensagem,
-          contexto: 'Cliente está escolhendo pratos mas não enviou números. Oriente de forma amigável.',
-        }, "Digite os *números* dos pratos (ex: 1 2 3), *pronto* quando terminar, ou peça para *ver o cardápio* de novo.");
+          contexto: 'A mensagem pode ser: pergunta (ex: quanto demora?, tem entrega?), comentário, ou pedido que não entendemos. Responda como atendente real: se for pergunta, ajude; se for confusão, peça gentilmente para repetir. Depois oriente: pode digitar números ou falar em texto (ex: quero 1 maminha e 2 carne de sol). Seja natural, não robótico.',
+        }, "Não consegui entender direito. 😅 Pode digitar os números (ex: 1 2) ou escrever tipo *quero 1 maminha e 2 carne de sol*? Quando terminar, *pronto*.");
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         return res.end(twiml.toString());
       }
 
+      const idsUnicos = [...new Set(itensPedido.map(i => i.id))];
       const pratos = await pool.query(
         "SELECT id, nome, preco FROM cardapio WHERE ativo=true AND id = ANY($1) AND (categoria='prato' OR categoria IS NULL)",
-        [ids]
+        [idsUnicos]
       );
+      const mapaPratos = Object.fromEntries(pratos.rows.map(p => [p.id, p]));
+      const itensValidos = itensPedido.filter(i => mapaPratos[i.id]);
 
       let pedido = await pool.query(
         `SELECT id FROM pedidos WHERE cliente_id=$1 AND status='montando' ORDER BY criado_em DESC LIMIT 1`,
@@ -264,26 +283,30 @@ app.post('/whatsapp', async (req, res) => {
       }
 
       const pedidoId = pedido.rows[0].id;
-      for (const p of pratos.rows) {
+      const nomesArr = [];
+      for (const item of itensValidos) {
+        const p = mapaPratos[item.id];
         await pool.query(
           'INSERT INTO itens_pedido (pedido_id, nome_item, preco, quantidade) VALUES ($1,$2,$3,$4)',
-          [pedidoId, p.nome, p.preco, 1]
+          [pedidoId, p.nome, p.preco, item.quantidade]
         );
+        nomesArr.push(item.quantidade > 1 ? `${p.nome} x${item.quantidade}` : p.nome);
       }
+      const nomes = nomesArr.join(', ');
 
       await pool.query(`
         UPDATE pedidos SET total = (
           SELECT COALESCE(SUM(preco * quantidade), 0) FROM itens_pedido WHERE pedido_id = $1
         ) WHERE id = $1
       `, [pedidoId]);
-
-      const nomes = pratos.rows.map(p => p.nome).join(', ');
+      const itensPedidoAtual = await pool.query('SELECT nome_item, quantidade FROM itens_pedido WHERE pedido_id=$1', [pedidoId]);
+      const pedidoAtualStr = itensPedidoAtual.rows.map(i => `${i.nome_item} x${i.quantidade}`).join(', ');
       await responder(twiml, {
         etapa: 'pratos_adicionados',
         mensagemCliente: mensagem,
-        contexto: 'Acabou de adicionar pratos ao pedido. Confirme os itens e pergunte se quer mais algum ou *pronto* para bebidas.',
-        dados: { itensAdicionados: nomes },
-      }, `Adicionei: ${nomes}.\n\nQuer mais algum prato? Digite os números ou *pronto* para ir para as bebidas.`);
+        contexto: 'Cliente acabou de pedir pratos. Reconheça o pedido com entusiasmo, confirme os itens adicionados e pergunte se quer mais algum ou pronto para bebidas.',
+        dados: { itensAdicionados: nomes, pedidoAtual: pedidoAtualStr },
+      }, `Anotado! ${nomes}. 👍\n\nQuer mais algum prato? Digite os números ou *pronto* para ir para as bebidas.`);
     }
 
     // ---------- Escolhendo BEBIDAS ou "não quero" / "pronto" / ver cardápio de novo ----------
@@ -339,9 +362,9 @@ app.post('/whatsapp', async (req, res) => {
         await responder(twiml, {
           etapa: 'resumo_pedido_pedir_confirmacao',
           mensagemCliente: mensagem,
-          contexto: 'Cliente não quis bebida ou confirmou bebidas. Mostre o resumo do pedido com total e pergunte se está certo (sim/não).',
+          contexto: 'Cliente não quis bebida ou confirmou. Mostre o resumo com carinho e pergunte se está tudo certo. Seja natural.',
           dados: { resumoPedido: linhas, total },
-        }, `Tudo bem! 👍\n\nVamos confirmar seu pedido:\n\n📋 *RESUMO*\n${linhas}\n\n*Total: R$ ${total.toFixed(2)}*\n\nEstá certo o seu pedido? (sim/não)`);
+        }, `Beleza! 👍 Vamos confirmar:\n\n📋 *SEU PEDIDO*\n${linhas}\n\n*Total: R$ ${total.toFixed(2)}*\n\nEstá certo? Responda *sim* ou *não*`);
         await pool.query(
           'UPDATE pedidos SET status=$1 WHERE id=$2',
           ['confirmando', pedido.rows[0].id]
@@ -354,21 +377,30 @@ app.post('/whatsapp', async (req, res) => {
         return res.end(twiml.toString());
       }
 
-      const ids = [...new Set(extrairNumeros(mensagemLower))];
-      if (ids.length === 0) {
+      let itensBebida = extrairItensComQuantidade(mensagemLower);
+      if (itensBebida.length === 0) {
+        const bebidasCardapio = await pool.query(
+          "SELECT id, nome FROM cardapio WHERE ativo=true AND categoria='bebida' ORDER BY id"
+        );
+        itensBebida = await interpretarPedidoNatural(mensagem, bebidasCardapio.rows);
+      }
+      if (itensBebida.length === 0) {
         await responder(twiml, {
-          etapa: 'escolhendo_bebidas_aguardando',
+          etapa: 'escolhendo_bebidas_sem_pedido_claro',
           mensagemCliente: mensagem,
-          contexto: 'Cliente está na etapa de bebidas. Peça os números ou *não* se não quiser.',
-        }, "Digite os números das bebidas ou *não* se não quiser bebida.");
+          contexto: 'A mensagem pode ser pergunta, comentário ou pedido não entendido. Responda como atendente humano. Depois oriente: números ou nome das bebidas, ou *não* se não quiser.',
+        }, "Não consegui entender. 😅 Digite os números (ex: 9 10) ou o nome (ex: *quero 2 coca*). Se não quiser bebida, digite *não*.");
         res.writeHead(200, { 'Content-Type': 'text/xml' });
         return res.end(twiml.toString());
       }
 
+      const idsBebidas = [...new Set(itensBebida.map(i => i.id))];
       const bebidas = await pool.query(
         "SELECT id, nome, preco FROM cardapio WHERE ativo=true AND id = ANY($1) AND categoria='bebida'",
-        [ids]
+        [idsBebidas]
       );
+      const mapaBebidas = Object.fromEntries(bebidas.rows.map(b => [b.id, b]));
+      const itensBebidaValidos = itensBebida.filter(i => mapaBebidas[i.id]);
 
       const pedido = await pool.query(
         `SELECT id FROM pedidos WHERE cliente_id=$1 AND status='montando' ORDER BY criado_em DESC LIMIT 1`,
@@ -383,11 +415,14 @@ app.post('/whatsapp', async (req, res) => {
         return res.end(twiml.toString());
       }
 
-      for (const b of bebidas.rows) {
+      const nomesBebidasArr = [];
+      for (const item of itensBebidaValidos) {
+        const b = mapaBebidas[item.id];
         await pool.query(
           'INSERT INTO itens_pedido (pedido_id, nome_item, preco, quantidade) VALUES ($1,$2,$3,$4)',
-          [pedido.rows[0].id, b.nome, b.preco, 1]
+          [pedido.rows[0].id, b.nome, b.preco, item.quantidade]
         );
+        nomesBebidasArr.push(item.quantidade > 1 ? `${b.nome} x${item.quantidade}` : b.nome);
       }
       await pool.query(`
         UPDATE pedidos SET total = (
@@ -395,13 +430,15 @@ app.post('/whatsapp', async (req, res) => {
         ) WHERE id = $1
       `, [pedido.rows[0].id]);
 
-      const nomes = bebidas.rows.map(b => b.nome).join(', ');
+      const nomes = nomesBebidasArr.join(', ');
+      const itensPedidoAtualBeb = await pool.query('SELECT nome_item, quantidade FROM itens_pedido WHERE pedido_id=$1', [pedido.rows[0].id]);
+      const pedidoAtualBebStr = itensPedidoAtualBeb.rows.map(i => `${i.nome_item} x${i.quantidade}`).join(', ');
       await responder(twiml, {
         etapa: 'bebidas_adicionadas',
         mensagemCliente: mensagem,
-        contexto: 'Acabou de adicionar bebidas. Pergunte se quer mais alguma ou *não* para confirmar.',
-        dados: { itensAdicionados: nomes },
-      }, `Adicionei: ${nomes}.\n\nMais alguma bebida? Digite os números ou *não* para confirmar o pedido.`);
+        contexto: 'Cliente acabou de pedir bebidas. Reconheça com naturalidade e pergunte se quer mais alguma ou não para confirmar.',
+        dados: { itensAdicionados: nomes, pedidoAtual: pedidoAtualBebStr },
+      }, `Anotado! ${nomes}.\n\nMais alguma bebida? Digite os números ou *não* para confirmar o pedido.`);
     }
 
     // ---------- Confirmando pedido (está certo?) ----------
@@ -497,8 +534,8 @@ app.post('/whatsapp', async (req, res) => {
       await responder(twiml, {
         etapa: 'fora_do_fluxo',
         mensagemCliente: mensagem,
-        contexto: 'Cliente está fora do fluxo esperado. Convide a começar um pedido dizendo oi ou boa noite.',
-      }, "Mande *oi* ou *boa noite* para começar um pedido.");
+        contexto: 'Cliente mandou algo fora do fluxo. Responda como atendente acolhedor, sem soar robótico. Convide a fazer um pedido de forma natural.',
+      }, "Oi! 👋 Em que posso ajudar? Mande *oi* ou *boa noite* para começar um pedido.");
     }
 
     res.writeHead(200, { 'Content-Type': 'text/xml' });
