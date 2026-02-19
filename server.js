@@ -102,9 +102,30 @@ app.post('/whatsapp', async (req, res) => {
           await pool.query('INSERT INTO itens_pedido (pedido_id, nome_item, preco, quantidade) VALUES ($1,$2,$3,$4)', [pedidoId, p.nome, p.preco, Math.min(99, Number(item.quantidade))]);
         }
       }
-      await pool.query(`UPDATE pedidos SET total = (SELECT COALESCE(SUM(preco * quantidade), 0) FROM itens_pedido WHERE pedido_id = $1) WHERE id = $1`, [pedidoId]);
-      twiml.message(msgResposta);
-    } else if (acao === 'adicionar_bebidas' && Array.isArray(dados.itens) && dados.itens.length > 0) {
+      const { total } = await pool.query('SELECT COALESCE(SUM(preco * quantidade), 0) as total FROM itens_pedido WHERE pedido_id=$1', [pedidoId]).then(r => r.rows[0]);
+      await pool.query('UPDATE pedidos SET total=$1 WHERE id=$2', [total, pedidoId]);
+      
+      // Atualizar etapa do cliente
+      await pool.query('UPDATE clientes SET etapa=$1 WHERE telefone=$2', [proximaEtapa, telefone]);
+      
+      return twiml.message(msgResposta);
+    }
+
+    if (acao === 'finalizar_pedido') {
+      // Mudar status do pedido para novo
+      await pool.query(`
+        UPDATE pedidos 
+        SET status = 'novo' 
+        WHERE cliente_id = $1 AND status = 'montando'
+      `, [clienteData.id]);
+      
+      // Atualizar etapa do cliente
+      await pool.query('UPDATE clientes SET etapa=$1 WHERE telefone=$2', [proximaEtapa, telefone]);
+      
+      return twiml.message(msgResposta);
+    }
+
+    if (acao === 'adicionar_bebidas' && Array.isArray(dados.itens) && dados.itens.length > 0) {
       const mapaBebidas = Object.fromEntries(cardapioBebidas.map(b => [b.id, b]));
       const pedido = await pool.query(`SELECT id FROM pedidos WHERE cliente_id=$1 AND status='montando' ORDER BY criado_em DESC LIMIT 1`, [clienteData.id]);
       if (pedido.rows.length > 0) {

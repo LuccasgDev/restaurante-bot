@@ -526,12 +526,12 @@ Para outras ações, dados pode ser {}.`;
       }
       
       // Don't want drinks - Natural
-      if (msgLower.includes('não quero bebida') || msgLower.includes('nao quero bebida') || msgLower.includes('só os pratos') || msgLower.includes('sem bebida')) {
+      if (msgLower.includes('não quero bebida') || msgLower.includes('nao quero bebida') || msgLower.includes('só os pratos') || msgLower.includes('sem bebida') || (msgLower.includes('não') && msgLower.includes('obrigado'))) {
         return { 
-          mensagem: '👍 *Entendido!* Focamos só nos pratos então! Vou preparar tudo com muito carinho! ❤️ Quer confirmar seu pedido ou precisa de mais algo?', 
-          acao: 'mostrar_resumo_confirmar', 
+          mensagem: '👍 *Perfeito!* Vou preparar seu pedido então! Alguma observação especial? Alguma preferência no ponto da carne? 🍽️', 
+          acao: 'finalizar_pedido', 
           dados: {}, 
-          proximaEtapa: 'confirmando_pedido' 
+          proximaEtapa: 'finalizando' 
         };
       }
       
