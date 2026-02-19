@@ -101,7 +101,7 @@ Mensagem do cliente: "${mensagemCliente.trim()}"
 Intenções possíveis (responda APENAS com uma dessas palavras, nada mais):
 - QUER_VER_CARDAPIO: cliente quer ver o cardápio ou está engajando (ex: "sim", "quero", "pode", "e aí", "fala", "opa", "mostra o cardápio", "me manda")
 - VER_CARDAPIO: cliente pede para ver o cardápio novamente (ex: "mostra de novo", "pode mostrar o cardápio novamente", "ver o cardápio de novo")
-- CANCELAR: cliente quer desistir, encerrar, não quer mais (ex: "não quero mais", "obrigado até a próxima", "cancelar", "deixa pra lá", "sair")
+- CANCELAR: cliente quer desistir, encerrar, cancelar (ex: "não quero mais", "quero encerrar", "encerrar", "excerrar", "cancelar", "deixa pra lá", "sair")
 - PRONTO: cliente terminou de escolher (ex: "pronto", "é isso", "só isso", "pode ser")
 - ESCOLHER_ITENS: cliente está fazendo pedido — números (ex: "1 2") ou linguagem natural (ex: "quero 1 maminha e 2 carne de sol")
 - NAO_QUERO_BEBIDA: não quer bebida (ex: "não", "não quero", "obrigado não")
@@ -179,4 +179,75 @@ Responda APENAS JSON: [{"id":n,"quantidade":n},...]. Se não for pedido, [].`;
   }
 }
 
-module.exports = { gerarRespostaAgente, detectarIntent, interpretarPedidoNatural };
+/**
+ * Agente 100% — processa a mensagem e decide a ação.
+ * Recebe o contexto completo e retorna { mensagem, acao, dados, proximaEtapa }.
+ * O servidor apenas executa o que o agente decidir.
+ */
+async function processarMensagemAgente({ telefone, mensagem, etapa, pedidoAtual, cardapioPratos, cardapioBebidas }) {
+  if (!process.env.GEMINI_API_KEY) {
+    return { mensagem: 'Desculpe, o atendimento está temporariamente indisponível. Tente mais tarde.', acao: 'responder', dados: {}, proximaEtapa: etapa };
+  }
+
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.0-flash',
+    systemInstruction: INSTRUCOES_SISTEMA,
+  });
+
+  const pratosStr = cardapioPratos.map(p => `${p.id}: ${p.nome} - R$ ${Number(p.preco).toFixed(2)}`).join('\n');
+  const bebidasStr = cardapioBebidas.length ? cardapioBebidas.map(b => `${b.id}: ${b.nome} - R$ ${Number(b.preco).toFixed(2)}`).join('\n') : 'Nenhuma bebida no cardápio.';
+  const pedidoStr = pedidoAtual ? pedidoAtual.itens.map(i => `  • ${i.nome_item} x${i.quantidade} - R$ ${(Number(i.preco) * Number(i.quantidade)).toFixed(2)}`).join('\n') + `\nTotal: R$ ${pedidoAtual.total}` : 'Nenhum item no pedido.';
+
+  const prompt = `Você é o atendente do restaurante. Decida o que fazer com base na mensagem do cliente e no contexto.
+
+CONTEXTO:
+- Etapa atual: ${etapa === 'start' ? 'inicio' : etapa}
+- Pedido atual:\n${pedidoStr}
+- Cardápio pratos:\n${pratosStr}
+- Cardápio bebidas:\n${bebidasStr}
+
+Mensagem do cliente: "${mensagem}"
+
+FLUXO DO RESTAURANTE (você decide o próximo passo):
+1. inicio/aguardando_cardapio → Cliente quer cardápio? → mostrar_cardapio_pratos
+2. escolhendo_pratos → Cliente pediu pratos? → adicionar_pratos | Pronto/sem mais? → oferecer_bebidas | Cancelar? → cancelar
+3. escolhendo_bebidas → Cliente pediu bebidas? → adicionar_bebidas | Não quero/confirmar? → mostrar_resumo_confirmar | Ver cardápio? → mostrar_cardapio_bebidas
+4. confirmando_pedido → Confirmou? → pedir_pagamento | Não confirmou? → cancelar
+5. pagamento → Escolheu forma (Pix/Dinheiro/Cartão)? → finalizar_pedido
+
+REGRAS:
+- "N quentinhas de [prato]" → N é QUANTIDADE (ex: 3 quentinhas de maminha = id 1, qtd 3)
+- Associe pelo NOME do prato, ignore typos (costela suina = Costela suína)
+- Para adicionar_pratos/adicionar_bebidas: extraia itens no formato [{id: número_do_cardápio, quantidade: número}]
+- Cancelar: encerrar, excerrar, sair, não quero mais, etc.
+
+Responda APENAS com um JSON válido (nada antes ou depois):
+{"mensagem":"texto que você enviaria ao cliente","acao":"mostrar_cardapio_pratos|mostrar_cardapio_bebidas|adicionar_pratos|adicionar_bebidas|oferecer_bebidas|mostrar_resumo_confirmar|pedir_pagamento|finalizar_pedido|cancelar|responder","dados":{},"proximaEtapa":"inicio|aguardando_cardapio|escolhendo_pratos|escolhendo_bebidas|confirmando_pedido|pagamento"}
+
+Para acao "adicionar_pratos" ou "adicionar_bebidas", inclua em dados: {"itens":[{"id":1,"quantidade":2},...]}
+Para acao "finalizar_pedido", inclua em dados: {"formaPagamento":"Pix"|"Dinheiro"|"Cartão"}
+Para outras ações, dados pode ser {}.`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const text = (result.response && result.response.text() || '').trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error('[Agente] Resposta não contém JSON:', text.slice(0, 200));
+      return { mensagem: 'Desculpe, não consegui processar. Pode repetir?', acao: 'responder', dados: {}, proximaEtapa: etapa };
+    }
+    const parsed = JSON.parse(jsonMatch[0]);
+    const acoesValidas = ['mostrar_cardapio_pratos', 'mostrar_cardapio_bebidas', 'adicionar_pratos', 'adicionar_bebidas', 'oferecer_bebidas', 'mostrar_resumo_confirmar', 'pedir_pagamento', 'finalizar_pedido', 'cancelar', 'responder'];
+    return {
+      mensagem: parsed.mensagem || 'Em que posso ajudar?',
+      acao: acoesValidas.includes(parsed.acao) ? parsed.acao : 'responder',
+      dados: parsed.dados || {},
+      proximaEtapa: parsed.proximaEtapa || etapa,
+    };
+  } catch (err) {
+    console.error('[Agente] Erro:', err.message);
+    return { mensagem: 'Desculpe, ocorreu um erro. Tente novamente ou mande *oi*.', acao: 'responder', dados: {}, proximaEtapa: etapa };
+  }
+}
+
+module.exports = { gerarRespostaAgente, detectarIntent, interpretarPedidoNatural, processarMensagemAgente };
